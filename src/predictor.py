@@ -1,4 +1,4 @@
-
+import matplotlib.pyplot as plt
 import numpy as np 
 import os
 
@@ -14,6 +14,10 @@ def load_image_file(filename):
 			z.append(l)
 
 		return z
+
+def write_image_file(image, filename):
+	np.savetxt(filename, image, fmt='%d', delimiter=' ', newline='\n', header='P2\n32 32\n255', comments='')
+
 
 def load_params(filename, N, H, C):
 	with open(filename, 'r') as f:
@@ -75,19 +79,44 @@ def load_params(filename, N, H, C):
 
 def forward(input,params):
 	a1 = np.dot(params['W1'],input) + params['b1']
+	relu1 = [a1 < 0]
 	a1[a1 < 0] = 0
 
 	a2 = np.dot(params['W2'],a1) + params['b2']
+	relu2 = [a2 < 0]
 	a2[ a2 < 0] = 0
 
 	y = np.dot(params['W3'], a2) + params['b3']
 
 	z = np.exp(y)
 	z = z/np.sum(z)
-	return z
 
-def predict():
-	image_folder = '/home/bhavya/Programming/ML_notes/intern-coding-tasks/2018/ml/pgm'
+	cache = (relu1,relu2)
+
+	return z, cache
+
+def backward(probs, label, params, cache):
+	relu1 = cache[0]
+	relu2 = cache[1]
+
+	dy = probs
+	dy[label] -= 1
+
+	dh2 = np.dot(params['W3'].T, dy)
+
+	da2 = dh2
+	da2[relu2] = 0
+
+	dh1 = np.dot(params['W2'].T, da2)
+
+	da1 = dh1
+	da1[relu1] = 0
+
+	dx = np.dot(params['W1'].T, da1)
+
+	return dx
+
+def predict(image_folder):
 	
 	correct = 0
 	total = 0
@@ -101,7 +130,7 @@ def predict():
 				image = load_image_file(os.path.join(image_folder,filename))
 				image = np.ravel(image)/255.0
 
-				z = forward(image,params)
+				z, _ = forward(image,params)
 				result = np.argmax(z) + 1 
 
 				f1 = filename[0:-4]
@@ -114,8 +143,58 @@ def predict():
 				# print("File: {0}, predicted: {1}, actual: {2}".format(filename, result, int(l)))
 				total += 1
 
-		print("Accuracy : {0}".format(100.0*correct/total))
+		print("Accuracy : {0:0.4f}".format(100.0*correct/total))
 
+def normalize_and_reshape(input):
+	a = np.min(input)
+	b = np.max(input)
 
-def fgsm():
-	pass
+	out = 255.0*(input - a)/(b - a)
+	out.astype(np.uint8)
+	out = np.reshape(out,[32,32])
+
+	return out
+
+def fgsm(root_dir, eps = 0.1, generate_baseline=False):
+
+	image_folder = os.path.join(root_dir,'pgm')
+	output_folder = os.path.join(root_dir,'adv')
+
+	if not os.path.exists(output_folder):
+		os.makedirs(output_folder)
+	
+	baseline_folder = os.path.join(root_dir,'base')
+	if generate_baseline and not os.path.exists(baseline_folder):
+		os.makedirs(baseline_folder)
+
+	with open('../labels.txt','r') as f:
+		lines = f.readlines()
+		params = load_params('../param.txt', 1024, 256, 23)
+
+		for filename in os.listdir(image_folder):
+			if filename.endswith(".pgm"):
+				image = load_image_file(os.path.join(image_folder,filename))
+				image = np.ravel(image)/255.0
+
+				z, cache = forward(image,params)
+
+				relu1 = cache[0]
+				relu2 = cache[1]
+
+				# t is the actual label
+				f1 = filename[0:-4]
+				t = lines[int(f1)-1].strip()
+				t = int(t) - 1
+
+				dx = backward(z, t, params, cache)
+
+				adv = image + eps * np.sign(dx)
+
+				adv_norm = normalize_and_reshape(adv)
+
+				write_image_file(adv_norm, os.path.join(output_folder, filename))
+
+				if generate_baseline:
+					base = image + eps * np.sign(np.random.randn(1024))
+					base_norm = normalize_and_reshape(base)
+					write_image_file(base_norm, os.path.join(baseline_folder, filename))
